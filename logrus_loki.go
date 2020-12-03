@@ -2,6 +2,7 @@ package hook
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/afiskon/promtail-client/promtail"
@@ -13,17 +14,24 @@ var supportedLevels = []logrus.Level{logrus.DebugLevel, logrus.InfoLevel, logrus
 // Config defines configuration for hook for Loki
 type Config struct {
 	URL                string
-	Labels             string
+	LevelName          string
+	Labels             map[string]string
 	BatchWait          time.Duration
 	BatchEntriesNumber int
 }
 
 func (c *Config) setDefault() {
+	if c.LevelName == "" {
+		c.LevelName = "severity"
+	}
 	if c.URL == "" {
 		c.URL = "http://localhost:3100/api/prom/push"
 	}
-	if c.Labels == "" {
-		c.Labels = "{source=\"" + "test" + "\",job=\"" + "job" + "\"}"
+	if len(c.Labels) == 0 {
+		c.Labels = map[string]string{
+			"source": "test",
+			"job":    "job",
+		}
 	}
 	if c.BatchWait == time.Second {
 		c.BatchWait = 5 * time.Second
@@ -34,44 +42,62 @@ func (c *Config) setDefault() {
 
 }
 
+// genLabelsWithLogLevel generate available labels of loki from level and the label dict you defined
+func (c *Config) genLabelsWithLogLevel(level string) string {
+	c.Labels[c.LevelName] = level
+	labelsList := []string{}
+	for k, v := range c.Labels {
+		labelsList = append(labelsList, fmt.Sprintf(`%s="%s"`, k, v))
+	}
+	labelString := fmt.Sprintf(`{%s}`, strings.Join(labelsList, ", "))
+	return labelString
+}
+
+// Hook a logrus hook for loki
 type Hook struct {
-	client promtail.Client
+	clients map[logrus.Level]promtail.Client
 }
 
 // NewHook creates a new hook for Loki
 func NewHook(c *Config) (*Hook, error) {
+	var err error
 	if c == nil {
 		c = &Config{}
 	}
 	c.setDefault()
 	conf := promtail.ClientConfig{
 		PushURL:            c.URL,
-		Labels:             c.Labels,
 		BatchWait:          c.BatchWait,
 		BatchEntriesNumber: c.BatchEntriesNumber,
 		SendLevel:          promtail.INFO,
 		PrintLevel:         promtail.ERROR,
 	}
-	loki, err := promtail.NewClientJson(conf)
-	if err != nil {
-		return nil, fmt.Errorf("unable to init promtail client: %v", err)
+
+	// create different promtail client instance
+	clients := make(map[logrus.Level]promtail.Client)
+	for _, v := range supportedLevels {
+		conf.Labels = c.genLabelsWithLogLevel(v.String())
+		clients[v], err = promtail.NewClientJson(conf)
+		if err != nil {
+			return nil, fmt.Errorf("unable to init promtail client: %v", err)
+		}
 	}
 	return &Hook{
-		client: loki,
+		clients: clients,
 	}, nil
 }
 
 // Fire implements interface for logrus
 func (hook *Hook) Fire(entry *logrus.Entry) error {
-	switch entry.Level.String() {
-	case "debug":
-		hook.client.Debugf(entry.Level.String())
-	case "info":
-		hook.client.Infof(entry.Level.String())
-	case "warning":
-		hook.client.Warnf(entry.Level.String())
-	case "error":
-		hook.client.Errorf(entry.Level.String())
+	switch entry.Level {
+	case logrus.DebugLevel:
+		hook.clients[entry.Level].Debugf(entry.Message)
+	case logrus.InfoLevel:
+		hook.clients[entry.Level].Infof(entry.Message)
+	case logrus.WarnLevel:
+		hook.clients[entry.Level].Warnf(entry.Message)
+	case logrus.ErrorLevel:
+		hook.clients[entry.Level].Errorf(entry.Message)
 	default:
 		return fmt.Errorf("unknown log level")
 	}

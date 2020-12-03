@@ -1,4 +1,4 @@
-module github.com/saromanov/logrus-loki-hook
+module github.com/akkuman/logrus-loki-hook
 
 go 1.13
 
