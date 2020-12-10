@@ -33,7 +33,7 @@ func (c *Config) setDefault() {
 			"job":    "job",
 		}
 	}
-	if c.BatchWait == time.Second {
+	if c.BatchWait == 0 {
 		c.BatchWait = 5 * time.Second
 	}
 	if c.BatchEntriesNumber == 0 {
